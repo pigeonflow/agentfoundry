@@ -3,7 +3,7 @@
     "agentfoundry": {
       "command": "node",
       "args": ["dist/cli/index.js", "mcp-server"],
-      "cwd": "/absolute/path/to/do-agi",
+      "cwd": "/absolute/path/to/agent-foundry",
       "env": {
         "AGENTFOUNDRY_DB_PATH": "./agentfoundry.db",
         "AGENTFOUNDRY_FORWARD_CMD": "your-real-agent-cli --prompt-stdin"

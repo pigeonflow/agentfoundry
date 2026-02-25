@@ -29,7 +29,7 @@ Register as an MCP server (stdio):
       "type": "stdio",
       "command": "node",
       "args": ["./dist/cli/index.js", "mcp-server"],
-      "cwd": "/path/to/do-agi",
+      "cwd": "/path/to/agent-foundry",
       "env": { "AGENTFOUNDRY_DB_PATH": "./agentfoundry.db" }
     }
   }
