@@ -20,3 +20,4 @@ agentfoundry.db-wal
 # Logs
 *.log
 npm-debug.log*
+.npmrc

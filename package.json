@@ -6,9 +6,18 @@
   "engines": {
     "node": ">=18.0.0"
   },
+  "author": "pigeonflowai",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/pigeonflow/agentfoundry"
+  },
+  "keywords": ["ai", "agent", "task", "mcp", "llm", "queue", "verification", "cli"],
   "files": [
     "dist/",
-    "dashboard-ui/dist/"
+    "dashboard-ui/dist/",
+    "README.md",
+    "LICENSE"
   ],
   "bin": {
     "agentfoundry": "./dist/cli/index.js"
