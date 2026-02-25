@@ -3,6 +3,13 @@
   "version": "0.1.0",
   "description": "CLI-first AI task manager with planning, queueing, dispatch, and verification.",
   "type": "module",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "files": [
+    "dist/",
+    "dashboard-ui/dist/"
+  ],
   "bin": {
     "agentfoundry": "./dist/cli/index.js"
   },
@@ -19,30 +26,28 @@
     "status": "tsx src/cli/index.ts status",
     "watch": "tsx src/cli/index.ts watch",
     "test": "vitest run",
-    "test:watch": "vitest",
-    "postinstall": "npx dep-pulse || true"
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.17.0",
     "better-sqlite3": "^11.8.1",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.8",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^24.0.0",
+    "@vitejs/plugin-vue": "^5.2.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-vue-next": "^0.525.0",
     "radix-vue": "^1.9.13",
     "tailwind-merge": "^2.6.0",
-    "vue": "^3.5.13",
-    "zod": "^3.24.1"
-  },
-  "devDependencies": {
-    "@tailwindcss/vite": "^4.1.8",
-    "@vitejs/plugin-vue": "^5.2.1",
     "tailwindcss": "^4.1.8",
-    "@types/better-sqlite3": "^7.6.13",
-    "@types/node": "^24.0.0",
     "tsx": "^4.19.2",
     "typescript": "^5.8.3",
     "vite": "^5.4.11",
     "vitest": "^2.1.8",
-    "dep-pulse": "^1.0.1"
+    "vue": "^3.5.13"
   }
 }

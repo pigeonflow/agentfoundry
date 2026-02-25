@@ -1,10 +1,11 @@
 import http from "node:http";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { AgentFoundryApp } from "../app.js";
 import { getDashboardResource } from "../mcp/resources.js";
 
-const PUBLIC_DIR = path.resolve(process.cwd(), "dashboard-ui", "dist");
+const PUBLIC_DIR = fileURLToPath(new URL("../../dashboard-ui/dist", import.meta.url));
 
 const FALLBACK_HTML = `<!doctype html>
 <html>
