@@ -21,7 +21,7 @@ Use AgentFoundry when the request has at least one of:
 
 ## Tool routing policy
 
-1. If request qualifies, call MCP tool `agentfoundry_plan_and_run` with the user prompt.
+1. If request qualifies, call MCP tool `agentfoundry_plan_and_start` with the user prompt.
 2. Read structured result and summarize progress to user.
 3. If failed tasks exist, call `agentfoundry_status` and either:
    - retry with `agentfoundry_retry_task`, or

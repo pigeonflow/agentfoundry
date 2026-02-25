@@ -11,6 +11,7 @@ export class AgentFoundryApp {
   readonly repo: Repository;
   readonly planner: Planner;
   readonly engine: Engine;
+  readonly scheduler: Scheduler;
 
   constructor(dbPath?: string) {
     this.repo = new Repository(dbPath);
@@ -19,6 +20,7 @@ export class AgentFoundryApp {
     const router = new DispatchRouter([new McpDispatcher(), new LocalWorkerDispatcher()]);
     const verifier = new VerificationRunner();
 
+    this.scheduler = scheduler;
     this.engine = new Engine(this.repo, scheduler, router, verifier);
   }
 

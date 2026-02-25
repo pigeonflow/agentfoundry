@@ -39,6 +39,9 @@ npm run dev -- mcp-run "Implement feature X. Add tests."
 # Shortcut equivalents
 npm run mcp-run -- "Implement feature X. Add tests."
 npm run mcp-server
+npm run dashboard
+npm run dashboard:build
+npm run dashboard:dev
 
 # View run status
 npm run dev -- status <runId>
@@ -50,8 +53,15 @@ npm run dev -- retry <taskId>
 # Start MCP server on stdio
 npm run dev -- mcp-server
 
-# Use a real subprocess as subagent dispatcher
-AGENTFOUNDRY_SUBAGENT_CMD='/absolute/path/to/subagent-runner.sh' npm run dev -- run "Implement feature X. Add tests."
+# Start local visibility dashboard
+npm run dashboard -- --port=4317
+
+# Build and preview Vue dashboard frontend
+npm run dashboard:build
+npm run dashboard
+
+# Optional: forward built-in runner to your real coding agent
+AGENTFOUNDRY_FORWARD_CMD='your-real-agent-cli --prompt-stdin' npm run dev -- run "Implement feature X. Add tests."
 ```
 
 ## Local Setup (Recommended)
@@ -68,7 +78,7 @@ npm run build
 2. Run through MCP path directly (auto-spawns MCP server):
 
 ```bash
-AGENTFOUNDRY_SUBAGENT_CMD='/absolute/path/to/subagent-runner.sh' npm run dev -- mcp-run "Your broad prompt here"
+npm run dev -- mcp-run "Your broad prompt here"
 ```
 
 This is the easiest path for local Copilot-style collaboration because it validates the full MCP flow without extra editor configuration.
@@ -94,7 +104,7 @@ For a seamless OSS user flow, prefer this architecture:
 
 1. **MCP is the integration boundary** (stable, explicit tools/resources).
 2. **OpenClaw route policy decides when to call AgentFoundry**:
-	- Broad/multi-step requests -> call `agentfoundry_plan_and_run`.
+	- Broad/multi-step requests -> call `agentfoundry_plan_and_start`.
 	- Small/single-file requests -> handle directly.
 3. **SKILL is optional** and best used as a prompt-policy layer (classification and routing hints), not as the primary execution substrate.
 
@@ -118,13 +128,13 @@ npm run build
 - args: `dist/cli/index.js mcp-server`
 - cwd: repo root
 
-3. Optional: configure subagent command:
+3. Optional: configure a forward command for real coding-agent execution:
 
 ```bash
-export AGENTFOUNDRY_SUBAGENT_CMD='node -e "process.exit(0)"'
+export AGENTFOUNDRY_FORWARD_CMD='your-real-agent-cli --prompt-stdin'
 ```
 
-4. In OpenClaw routing logic, call MCP tool `agentfoundry_plan_and_run` for broad asks.
+4. In OpenClaw routing logic, call MCP tool `agentfoundry_plan_and_start` for broad asks.
 
 ### MCP vs SKILL (best practice)
 
@@ -151,13 +161,13 @@ npm run build
 - args: `/absolute/path/to/do-agi/dist/cli/index.js mcp-server`
 - cwd: other project root
 
-3. Optional subagent behavior:
+3. Optional subagent forwarding behavior:
 
 ```bash
-AGENTFOUNDRY_SUBAGENT_CMD='your real subagent command'
+AGENTFOUNDRY_FORWARD_CMD='your-real-agent-cli --prompt-stdin'
 ```
 
-4. In your OpenClaw instructions/SKILL, route broad prompts to `agentfoundry_plan_and_run`.
+4. In your OpenClaw instructions/SKILL, route broad prompts to `agentfoundry_plan_and_start`.
 
 Observed local validation result:
 
@@ -169,7 +179,7 @@ Note: `npm link` may fail on some macOS setups due to global npm permissions. Us
 
 Dispatch is adapter-based to support different host environments:
 
-- `local-worker` is always available and can execute `AGENTFOUNDRY_SUBAGENT_CMD`.
+- `local-worker` is always available and uses the built-in subagent runner by default.
 - `mcp-adapter` is selected when `AGENTFOUNDRY_MCP_DISPATCH_CMD` is set.
 
 This keeps the queue/state model stable while allowing host-specific subagent handoff behavior for OpenClaw, Claude/Codex wrappers, or future MCP-native routing.
@@ -192,9 +202,13 @@ Resources:
 Tools:
 
 - `agentfoundry_plan`
-- `agentfoundry_plan_and_run`
+- `agentfoundry_plan_and_start`
 - `agentfoundry_run`
 - `agentfoundry_execute_run`
+- `agentfoundry_claim_next_task`
+- `agentfoundry_heartbeat_lease`
+- `agentfoundry_submit_task_result`
+- `agentfoundry_fail_task`
 - `agentfoundry_status`
 - `agentfoundry_retry_task`
 
@@ -202,13 +216,48 @@ Prompt:
 
 - `agentfoundry_task_execution`
 
+## Local Dashboard
+
+AgentFoundry includes a local dashboard for visibility of plans and execution.
+
+The frontend is now a structured Vue 3 + Vite app under `dashboard-ui/`, served by the existing Node dashboard server.
+
+- Run list with status and estimated token usage
+- Selected run details with explicit actionable tasks vs task history
+- Completion/failure state
+- Recent queue events (including dispatch and verification flow)
+- Plan prompt visibility for current run
+
+Start it with:
+
+```bash
+npm run dashboard:build
+npm run dashboard -- --port=4317
+```
+
+Then open:
+
+```text
+http://127.0.0.1:4317
+```
+
 ## Important Runtime Notes
 
 If you call `agentfoundry_plan`, the run is created in `queued` state only. To actually execute tasks:
 
 - Call `agentfoundry_run` with `runId`, or
 - Call `agentfoundry_execute_run` with `runId` (backward-compatible alias), or
-- Call `agentfoundry_plan_and_run` directly (plan + execute in one call).
+- Call `agentfoundry_plan_and_start` directly (plan + start in one call, then loop `agentfoundry_claim_next_task`).
+
+For coding-agent pull execution (recommended for MCP hosts):
+
+1. Call `agentfoundry_run` (or `agentfoundry_plan` then `agentfoundry_run`) to start/resume a run.
+2. Repeatedly call `agentfoundry_claim_next_task` to lease one task at a time.
+3. Execute task work in your coding agent.
+4. Call `agentfoundry_submit_task_result` when done (or `agentfoundry_fail_task` on failure).
+5. Optionally call `agentfoundry_heartbeat_lease` while long tasks are in progress.
+
+This lease-based flow is what enables the coding agent (including me) to be the active worker over MCP, rather than relying on placeholder subprocess success.
 
 If runs fail immediately, check `agentfoundry_status` for `failedTaskDiagnostics` and `recentEvents`.
 
@@ -218,7 +267,7 @@ Common cause: using smoke-test subagent command:
 AGENTFOUNDRY_SUBAGENT_CMD='node -e "process.exit(0)"'
 ```
 
-This command does not edit code; it only confirms dispatch plumbing. AgentFoundry now treats missing subagent command as a hard failure. For real autonomous implementation, set `AGENTFOUNDRY_SUBAGENT_CMD` to a real coding agent invocation that can read `AF_TASK_PROMPT_FILE` and modify the target project.
+This command does not edit code; it only confirms dispatch plumbing. AgentFoundry now includes a built-in runner, so missing `AGENTFOUNDRY_SUBAGENT_CMD` no longer requires placeholders. For real autonomous code changes, set `AGENTFOUNDRY_FORWARD_CMD` so the built-in runner forwards each task prompt to your coding agent CLI.
 
 Retry behavior:
 

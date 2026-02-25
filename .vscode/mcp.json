@@ -9,8 +9,7 @@
       ],
       "cwd": ".",
       "env": {
-        "AGENTFOUNDRY_DB_PATH": "./agentfoundry.db",
-        "AGENTFOUNDRY_SUBAGENT_CMD": "/absolute/path/to/subagent-runner.sh"
+        "AGENTFOUNDRY_DB_PATH": "./agentfoundry.db"
       }
     }
   },

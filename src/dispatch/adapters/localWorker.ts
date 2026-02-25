@@ -1,7 +1,22 @@
 import { spawnSync } from "node:child_process";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { DispatchRequest, DispatchResult } from "../../core/types.js";
 import { Dispatcher } from "../dispatcher.js";
 import { writeTaskPromptArtifact } from "../taskPrompt.js";
+
+function defaultSubagentCommand(): string {
+  const moduleFile = fileURLToPath(import.meta.url);
+  const moduleDir = path.dirname(moduleFile);
+
+  if (moduleDir.includes(`${path.sep}dist${path.sep}`)) {
+    const runnerJs = path.resolve(moduleDir, "../../subagent/runner.js");
+    return `node "${runnerJs}"`;
+  }
+
+  const runnerTs = path.resolve(moduleDir, "../../subagent/runner.ts");
+  return `npx tsx "${runnerTs}"`;
+}
 
 export class LocalWorkerDispatcher implements Dispatcher {
   name = "local-worker";
@@ -11,18 +26,8 @@ export class LocalWorkerDispatcher implements Dispatcher {
   }
 
   async dispatch(request: DispatchRequest): Promise<DispatchResult> {
-    const command = process.env.AGENTFOUNDRY_SUBAGENT_CMD;
+    const command = process.env.AGENTFOUNDRY_SUBAGENT_CMD?.trim() || defaultSubagentCommand();
     const taskPromptFile = writeTaskPromptArtifact(request.task);
-
-    if (!command) {
-      return {
-        taskId: request.task.id,
-        passedToAgent: false,
-        agentName: "local-subagent",
-        summary:
-          "No AGENTFOUNDRY_SUBAGENT_CMD configured. Real execution requires a subagent command that consumes AF_TASK_PROMPT_FILE."
-      };
-    }
 
     const result = spawnSync(command, {
       shell: true,

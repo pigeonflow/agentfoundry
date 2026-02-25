@@ -1,4 +1,5 @@
 import Database from "better-sqlite3";
+import { randomUUID } from "node:crypto";
 import {
   PlanRecord,
   QueueSnapshot,
@@ -75,6 +76,16 @@ CREATE TABLE IF NOT EXISTS verification_reports (
   evaluated_at TEXT NOT NULL,
   FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS task_leases (
+  task_id TEXT PRIMARY KEY,
+  lease_token TEXT NOT NULL,
+  lease_owner TEXT NOT NULL,
+  lease_expires_at TEXT NOT NULL,
+  heartbeat_at TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+);
 `;
 
 type TaskRow = {
@@ -118,6 +129,36 @@ export class Repository {
         discrepancies_json: JSON.stringify(plan.discrepancies),
         created_at: plan.createdAt
       });
+  }
+
+  getPlan(planId: string): PlanRecord | undefined {
+    const row = this.db
+      .prepare(
+        `SELECT id, input_prompt, risks_json, discrepancies_json, created_at
+         FROM plans
+         WHERE id = ?`
+      )
+      .get(planId) as
+      | {
+          id: string;
+          input_prompt: string;
+          risks_json: string;
+          discrepancies_json: string;
+          created_at: string;
+        }
+      | undefined;
+
+    if (!row) {
+      return undefined;
+    }
+
+    return {
+      id: row.id,
+      inputPrompt: row.input_prompt,
+      risks: JSON.parse(row.risks_json) as string[],
+      discrepancies: JSON.parse(row.discrepancies_json) as string[],
+      createdAt: row.created_at
+    };
   }
 
   saveRun(run: RunRecord): void {
@@ -296,7 +337,11 @@ export class Repository {
       .prepare(
         `UPDATE runs
          SET status = @status,
-             finished_at = CASE WHEN @finished = 1 THEN @finished_at ELSE finished_at END
+             finished_at = CASE
+               WHEN @finished = 1 THEN @finished_at
+               WHEN @status IN ('queued', 'running') THEN NULL
+               ELSE finished_at
+             END
          WHERE id = @run_id`
       )
       .run({
@@ -305,6 +350,242 @@ export class Repository {
         finished_at: finished ? nowIso() : null,
         run_id: runId
       });
+  }
+
+  claimNextTask(
+    runId: string,
+    leaseOwner: string,
+    leaseTtlSeconds = 300
+  ): { task: TaskRecord; leaseToken: string; leaseExpiresAt: string } | undefined {
+    const now = nowIso();
+    const leaseToken = randomUUID();
+    const leaseExpiresAt = new Date(Date.now() + leaseTtlSeconds * 1000).toISOString();
+
+    const tx = this.db.transaction(() => {
+      const candidate = this.db
+        .prepare(
+          `SELECT t.id
+           FROM tasks t
+           WHERE t.run_id = @run_id
+             AND t.status IN ('pending', 'ready')
+             AND NOT EXISTS (
+               SELECT 1
+               FROM task_dependencies td
+               JOIN tasks dep ON dep.id = td.depends_on_task_id
+               WHERE td.task_id = t.id
+                 AND dep.status != 'completed'
+             )
+           ORDER BY t.sequence_order ASC
+           LIMIT 1`
+        )
+        .get({ run_id: runId }) as { id: string } | undefined;
+
+      if (!candidate) {
+        return undefined;
+      }
+
+      const statusUpdate = this.db
+        .prepare(
+          `UPDATE tasks
+           SET status = 'running',
+               updated_at = @updated_at
+           WHERE id = @task_id
+             AND status IN ('pending', 'ready')`
+        )
+        .run({ task_id: candidate.id, updated_at: now });
+
+      if (statusUpdate.changes === 0) {
+        return undefined;
+      }
+
+      this.db.prepare(`DELETE FROM task_leases WHERE task_id = @task_id`).run({ task_id: candidate.id });
+
+      this.db
+        .prepare(
+          `INSERT INTO task_leases (
+             task_id,
+             lease_token,
+             lease_owner,
+             lease_expires_at,
+             heartbeat_at,
+             created_at
+           ) VALUES (
+             @task_id,
+             @lease_token,
+             @lease_owner,
+             @lease_expires_at,
+             @heartbeat_at,
+             @created_at
+           )`
+        )
+        .run({
+          task_id: candidate.id,
+          lease_token: leaseToken,
+          lease_owner: leaseOwner,
+          lease_expires_at: leaseExpiresAt,
+          heartbeat_at: now,
+          created_at: now
+        });
+
+      return candidate.id;
+    });
+
+    const taskId = tx();
+    if (!taskId) {
+      return undefined;
+    }
+
+    const task = this.getTask(taskId);
+    if (!task) {
+      return undefined;
+    }
+
+    return {
+      task,
+      leaseToken,
+      leaseExpiresAt
+    };
+  }
+
+  getActiveLeaseForRun(
+    runId: string,
+    leaseOwner: string
+  ): { taskId: string; leaseToken: string; leaseExpiresAt: string } | undefined {
+    const now = nowIso();
+    const row = this.db
+      .prepare(
+        `SELECT l.task_id, l.lease_token, l.lease_expires_at
+         FROM task_leases l
+         JOIN tasks t ON t.id = l.task_id
+         WHERE t.run_id = @run_id
+           AND t.status = 'running'
+           AND l.lease_owner = @lease_owner
+           AND l.lease_expires_at > @now
+         ORDER BY t.sequence_order ASC
+         LIMIT 1`
+      )
+      .get({ run_id: runId, lease_owner: leaseOwner, now }) as
+      | {
+          task_id: string;
+          lease_token: string;
+          lease_expires_at: string;
+        }
+      | undefined;
+
+    if (!row) {
+      return undefined;
+    }
+
+    return {
+      taskId: row.task_id,
+      leaseToken: row.lease_token,
+      leaseExpiresAt: row.lease_expires_at
+    };
+  }
+
+  heartbeatTaskLease(
+    taskId: string,
+    leaseToken: string,
+    leaseTtlSeconds = 300
+  ): { ok: boolean; leaseExpiresAt?: string } {
+    const now = nowIso();
+    const leaseExpiresAt = new Date(Date.now() + leaseTtlSeconds * 1000).toISOString();
+
+    const updated = this.db
+      .prepare(
+        `UPDATE task_leases
+         SET lease_expires_at = @lease_expires_at,
+             heartbeat_at = @heartbeat_at
+         WHERE task_id = @task_id
+           AND lease_token = @lease_token
+           AND lease_expires_at > @now`
+      )
+      .run({
+        task_id: taskId,
+        lease_token: leaseToken,
+        lease_expires_at: leaseExpiresAt,
+        heartbeat_at: now,
+        now
+      });
+
+    if (updated.changes === 0) {
+      return { ok: false };
+    }
+
+    return {
+      ok: true,
+      leaseExpiresAt
+    };
+  }
+
+  markClaimedTaskVerifying(taskId: string, leaseToken: string): boolean {
+    const now = nowIso();
+    const tx = this.db.transaction(() => {
+      const lease = this.db
+        .prepare(
+          `SELECT task_id
+           FROM task_leases
+           WHERE task_id = @task_id
+             AND lease_token = @lease_token
+             AND lease_expires_at > @now`
+        )
+        .get({ task_id: taskId, lease_token: leaseToken, now }) as { task_id: string } | undefined;
+
+      if (!lease) {
+        return false;
+      }
+
+      this.db.prepare(`DELETE FROM task_leases WHERE task_id = @task_id`).run({ task_id: taskId });
+
+      const updated = this.db
+        .prepare(
+          `UPDATE tasks
+           SET status = 'verifying',
+               updated_at = @updated_at
+           WHERE id = @task_id
+             AND status = 'running'`
+        )
+        .run({ task_id: taskId, updated_at: now });
+
+      return updated.changes > 0;
+    });
+
+    return tx();
+  }
+
+  failClaimedTask(taskId: string, leaseToken: string): boolean {
+    const now = nowIso();
+    const tx = this.db.transaction(() => {
+      const lease = this.db
+        .prepare(
+          `SELECT task_id
+           FROM task_leases
+           WHERE task_id = @task_id
+             AND lease_token = @lease_token
+             AND lease_expires_at > @now`
+        )
+        .get({ task_id: taskId, lease_token: leaseToken, now }) as { task_id: string } | undefined;
+
+      if (!lease) {
+        return false;
+      }
+
+      this.db.prepare(`DELETE FROM task_leases WHERE task_id = @task_id`).run({ task_id: taskId });
+
+      const updated = this.db
+        .prepare(
+          `UPDATE tasks
+           SET status = 'failed',
+               updated_at = @updated_at
+           WHERE id = @task_id
+             AND status = 'running'`
+        )
+        .run({ task_id: taskId, updated_at: now });
+
+      return updated.changes > 0;
+    });
+
+    return tx();
   }
 
   appendQueueEvent(
@@ -423,6 +704,31 @@ export class Repository {
       estimatedInputTokens,
       estimatedOutputTokens: Math.ceil(estimatedInputTokens * 0.5)
     };
+  }
+
+  getActiveLeaseOwnerForTask(taskId: string): string | undefined {
+    const row = this.db
+      .prepare(
+        `SELECT lease_owner FROM task_leases
+         WHERE task_id = ? AND lease_expires_at > ?`
+      )
+      .get(taskId, nowIso()) as { lease_owner: string } | undefined;
+    return row?.lease_owner;
+  }
+
+  stopRun(runId: string): boolean {
+    const run = this.getRun(runId);
+    if (!run) return false;
+    this.updateRunStatus(runId, "failed", true);
+    this.appendQueueEvent(runId, "run_stopped", { reason: "manually_stopped" });
+    return true;
+  }
+
+  deleteRun(runId: string): boolean {
+    const run = this.getRun(runId);
+    if (!run) return false;
+    this.db.prepare(`DELETE FROM runs WHERE id = ?`).run(runId);
+    return true;
   }
 
   private fromTaskRow(row: TaskRow): TaskRecord {

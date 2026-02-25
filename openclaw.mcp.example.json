@@ -6,7 +6,7 @@
       "cwd": "/absolute/path/to/do-agi",
       "env": {
         "AGENTFOUNDRY_DB_PATH": "./agentfoundry.db",
-        "AGENTFOUNDRY_SUBAGENT_CMD": "/absolute/path/to/subagent-runner.sh"
+        "AGENTFOUNDRY_FORWARD_CMD": "your-real-agent-cli --prompt-stdin"
       }
     }
   },

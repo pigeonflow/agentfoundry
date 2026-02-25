@@ -3,6 +3,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { AgentFoundryApp } from "../app.js";
+import { startDashboardServer } from "../dashboard/server.js";
 import { startMcpServer } from "../mcp/server.js";
 import { getRunStatusResource } from "../mcp/resources.js";
 
@@ -15,6 +16,7 @@ function usage(): void {
       "  plan <prompt>",
       "  run <prompt>",
       "  mcp-run <prompt>",
+      "  dashboard [--port=4317]",
       "  status <runId> [--json]",
       "  watch <runId> [--interval=1500]",
       "  retry <taskId>",
@@ -22,7 +24,8 @@ function usage(): void {
       "",
       "Environment:",
       "  AGENTFOUNDRY_DB_PATH=/path/to/agentfoundry.db",
-      "  AGENTFOUNDRY_SUBAGENT_CMD='your-agent-command'",
+      "  AGENTFOUNDRY_FORWARD_CMD='your-real-agent-cli --prompt-stdin'",
+      "  AGENTFOUNDRY_SUBAGENT_CMD='override built-in runner command'",
       "  AGENTFOUNDRY_MCP_DISPATCH_CMD='your-mcp-dispatch-command'",
       "  AGENTFOUNDRY_MCP_SERVER_CMD='custom server command'"
     ].join("\n") + "\n"
@@ -78,7 +81,7 @@ async function runViaMcp(prompt: string): Promise<Record<string, unknown>> {
   await client.connect(transport);
   try {
     const result = await client.callTool({
-      name: "agentfoundry_plan_and_run",
+      name: "agentfoundry_plan_and_start",
       arguments: { prompt }
     });
 
@@ -119,40 +122,27 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (command === "dashboard") {
+    const portArg = rest.find((arg) => arg.startsWith("--port="));
+    const port = portArg ? Number(portArg.split("=")[1]) : undefined;
+    startDashboardServer({ dbPath: process.env.AGENTFOUNDRY_DB_PATH, port });
+    return;
+  }
+
   const app = new AgentFoundryApp(process.env.AGENTFOUNDRY_DB_PATH);
   try {
     if (command === "plan") {
-      const prompt = rest.join(" ").trim();
-      if (!prompt) {
-        throw new Error("Missing prompt for plan command.");
-      }
-      const planned = app.planner.createRunFromPrompt(prompt);
-      process.stdout.write(
-        JSON.stringify(
-          {
-            runId: planned.run.id,
-            planId: planned.plan.id,
-            tasks: planned.tasks.length,
-            discrepancies: planned.plan.discrepancies,
-            risks: planned.plan.risks
-          },
-          null,
-          2
-        ) + "\n"
+      throw new Error(
+        "The 'plan' command requires an LLM to decompose tasks via MCP sampling.\n" +
+        "Use 'mcp-run <prompt>' instead, which routes through the MCP server where the LLM is available."
       );
-      return;
     }
 
     if (command === "run") {
-      const prompt = rest.join(" ").trim();
-      if (!prompt) {
-        throw new Error("Missing prompt for run command.");
-      }
-      const planned = app.planner.createRunFromPrompt(prompt);
-      await app.engine.run(planned.run.id);
-      const status = getRunStatusResource(app.repo, planned.run.id);
-      process.stdout.write(JSON.stringify(status, null, 2) + "\n");
-      return;
+      throw new Error(
+        "The 'run' command requires an LLM to decompose tasks via MCP sampling.\n" +
+        "Use 'mcp-run <prompt>' instead, which routes through the MCP server where the LLM is available."
+      );
     }
 
     if (command === "mcp-run") {
