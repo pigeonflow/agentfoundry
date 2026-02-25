@@ -4,7 +4,7 @@
       "type": "stdio",
       "command": "node",
       "args": [
-        "/Users/pigeonflow/.openclaw/workspace/projects/do-agi/dist/cli/index.js",
+        "./dist/cli/index.js",
         "mcp-server"
       ],
       "cwd": ".",
