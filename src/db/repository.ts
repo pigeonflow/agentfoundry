@@ -355,7 +355,7 @@ export class Repository {
   claimNextTask(
     runId: string,
     leaseOwner: string,
-    leaseTtlSeconds = 300
+    leaseTtlSeconds = 86400
   ): { task: TaskRecord; leaseToken: string; leaseExpiresAt: string } | undefined {
     const now = nowIso();
     const leaseToken = randomUUID();
@@ -486,7 +486,7 @@ export class Repository {
   heartbeatTaskLease(
     taskId: string,
     leaseToken: string,
-    leaseTtlSeconds = 300
+    leaseTtlSeconds = 86400
   ): { ok: boolean; leaseExpiresAt?: string } {
     const now = nowIso();
     const leaseExpiresAt = new Date(Date.now() + leaseTtlSeconds * 1000).toISOString();
