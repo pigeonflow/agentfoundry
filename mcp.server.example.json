@@ -1,13 +1,8 @@
 {
-  "mcpServers": {
+  "servers": {
     "agentfoundry": {
-      "command": "node",
-      "args": ["dist/cli/index.js", "mcp-server"],
-      "cwd": ".",
-      "env": {
-        "AGENTFOUNDRY_DB_PATH": "./agentfoundry.db",
-        "AGENTFOUNDRY_FORWARD_CMD": "your-real-agent-cli --prompt-stdin"
-      }
+      "command": "npx",
+      "args": ["agentfoundry", "mcp-server"]
     }
   }
 }

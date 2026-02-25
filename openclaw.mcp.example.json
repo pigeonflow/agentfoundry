@@ -1,21 +1,8 @@
 {
   "mcpServers": {
     "agentfoundry": {
-      "command": "node",
-      "args": ["dist/cli/index.js", "mcp-server"],
-      "cwd": "/absolute/path/to/agent-foundry",
-      "env": {
-        "AGENTFOUNDRY_DB_PATH": "./agentfoundry.db",
-        "AGENTFOUNDRY_FORWARD_CMD": "your-real-agent-cli --prompt-stdin"
-      }
+      "command": "npx",
+      "args": ["agentfoundry", "mcp-server"]
     }
-  },
-  "routing": {
-    "useAgentFoundryWhen": [
-      "request has multiple deliverables",
-      "request implies sequencing or dependencies",
-      "request requires explicit verification checkpoints"
-    ],
-    "otherwise": "handle directly in main agent"
   }
 }
