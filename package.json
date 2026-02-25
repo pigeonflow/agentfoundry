@@ -9,6 +9,12 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "tsx src/cli/index.ts",
+    "plan": "tsx src/cli/index.ts plan",
+    "run": "tsx src/cli/index.ts run",
+    "mcp-run": "tsx src/cli/index.ts mcp-run",
+    "mcp-server": "tsx src/cli/index.ts mcp-server",
+    "status": "tsx src/cli/index.ts status",
+    "watch": "tsx src/cli/index.ts watch",
     "test": "vitest run",
     "test:watch": "vitest",
     "postinstall": "npx dep-pulse"

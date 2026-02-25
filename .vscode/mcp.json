@@ -1,0 +1,18 @@
+{
+  "servers": {
+    "agentfoundry": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "/Users/pigeonflow/.openclaw/workspace/projects/do-agi/dist/cli/index.js",
+        "mcp-server"
+      ],
+      "cwd": ".",
+      "env": {
+        "AGENTFOUNDRY_DB_PATH": "./agentfoundry.db",
+        "AGENTFOUNDRY_SUBAGENT_CMD": "/absolute/path/to/subagent-runner.sh"
+      }
+    }
+  },
+  "inputs": []
+}

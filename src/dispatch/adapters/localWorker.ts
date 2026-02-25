@@ -17,10 +17,10 @@ export class LocalWorkerDispatcher implements Dispatcher {
     if (!command) {
       return {
         taskId: request.task.id,
-        passedToAgent: true,
-        agentName: "local-subagent-simulated",
+        passedToAgent: false,
+        agentName: "local-subagent",
         summary:
-          "No AGENTFOUNDRY_SUBAGENT_CMD configured; task handoff simulated. Set command to enable real subprocess execution."
+          "No AGENTFOUNDRY_SUBAGENT_CMD configured. Real execution requires a subagent command that consumes AF_TASK_PROMPT_FILE."
       };
     }
 

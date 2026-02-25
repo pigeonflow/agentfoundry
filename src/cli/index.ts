@@ -78,7 +78,7 @@ async function runViaMcp(prompt: string): Promise<Record<string, unknown>> {
   await client.connect(transport);
   try {
     const result = await client.callTool({
-      name: "agentfoundry_run",
+      name: "agentfoundry_plan_and_run",
       arguments: { prompt }
     });
 

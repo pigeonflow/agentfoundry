@@ -341,6 +341,51 @@ export class Repository {
       });
   }
 
+  latestVerificationReport(taskId: string): VerificationReport | undefined {
+    const row = this.db
+      .prepare(
+        `SELECT report_json
+         FROM verification_reports
+         WHERE task_id = ?
+         ORDER BY id DESC
+         LIMIT 1`
+      )
+      .get(taskId) as { report_json: string } | undefined;
+
+    if (!row) {
+      return undefined;
+    }
+
+    return JSON.parse(row.report_json) as VerificationReport;
+  }
+
+  listQueueEvents(
+    runId: string,
+    limit = 50
+  ): Array<{ eventType: string; taskId?: string; payload?: Record<string, unknown>; createdAt: string }> {
+    const rows = this.db
+      .prepare(
+        `SELECT event_type, task_id, payload_json, created_at
+         FROM queue_events
+         WHERE run_id = ?
+         ORDER BY id DESC
+         LIMIT ?`
+      )
+      .all(runId, limit) as Array<{
+      event_type: string;
+      task_id: string | null;
+      payload_json: string | null;
+      created_at: string;
+    }>;
+
+    return rows.map((row) => ({
+      eventType: row.event_type,
+      taskId: row.task_id ?? undefined,
+      payload: row.payload_json ? (JSON.parse(row.payload_json) as Record<string, unknown>) : undefined,
+      createdAt: row.created_at
+    }));
+  }
+
   queueSnapshot(runId: string): QueueSnapshot {
     const counts = this.db
       .prepare(

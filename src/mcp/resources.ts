@@ -11,13 +11,22 @@ export function getRunStatusResource(repo: Repository, runId: string): Record<st
     sequenceOrder: task.sequenceOrder,
     summary: task.contextCapsule.summary
   }));
+  const failedTaskDiagnostics = tasks
+    .filter((task) => task.status === "failed")
+    .map((task) => ({
+      taskId: task.id,
+      latestVerification: repo.latestVerificationReport(task.id)
+    }));
+  const recentEvents = repo.listQueueEvents(runId, 20);
 
   return {
     runId,
     run,
     snapshot,
     tokenUsage,
-    tasks
+    tasks,
+    failedTaskDiagnostics,
+    recentEvents
   };
 }
 

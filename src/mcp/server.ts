@@ -101,9 +101,9 @@ export async function startMcpServer(dbPath?: string): Promise<void> {
   );
 
   server.registerTool(
-    "agentfoundry_run",
+    "agentfoundry_plan_and_run",
     {
-      title: "Plan and Execute",
+      title: "Plan and Run",
       description: "Create a run from prompt and execute tasks through dispatch + verification.",
       inputSchema: {
         prompt: z.string().min(1)
@@ -121,19 +121,98 @@ export async function startMcpServer(dbPath?: string): Promise<void> {
   );
 
   server.registerTool(
+    "agentfoundry_run",
+    {
+      title: "Run Existing Plan",
+      description: "Execute or resume a previously planned run by runId.",
+      inputSchema: {
+        runId: z.string().min(1)
+      }
+    },
+    async ({ runId }) => {
+      const run = app.repo.getRun(runId);
+      if (!run) {
+        const payload = { ok: false, error: `Run not found: ${runId}` };
+        return {
+          content: [{ type: "text", text: JSON.stringify(payload) }],
+          structuredContent: payload
+        };
+      }
+
+      await app.engine.run(runId);
+      const payload = getRunStatusResource(app.repo, runId);
+      return {
+        content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+        structuredContent: payload
+      };
+    }
+  );
+
+  server.registerTool(
+    "agentfoundry_execute_run",
+    {
+      title: "Execute Existing Run (Alias)",
+      description: "Backward-compatible alias for agentfoundry_run.",
+      inputSchema: {
+        runId: z.string().min(1)
+      }
+    },
+    async ({ runId }) => {
+      const run = app.repo.getRun(runId);
+      if (!run) {
+        const payload = { ok: false, error: `Run not found: ${runId}` };
+        return {
+          content: [{ type: "text", text: JSON.stringify(payload) }],
+          structuredContent: payload
+        };
+      }
+
+      await app.engine.run(runId);
+      const payload = getRunStatusResource(app.repo, runId);
+      return {
+        content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+        structuredContent: payload
+      };
+    }
+  );
+
+  server.registerTool(
     "agentfoundry_retry_task",
     {
       title: "Retry Task",
       description: "Move a task back to pending so it can be rescheduled.",
       inputSchema: {
-        taskId: z.string().min(1)
+        taskId: z.string().min(1),
+        resumeRun: z.boolean().optional()
       }
     },
-    async ({ taskId }) => {
+    async ({ taskId, resumeRun }) => {
+      const task = app.repo.getTask(taskId);
+      if (!task) {
+        const payload = { ok: false, error: `Task not found: ${taskId}` };
+        return {
+          content: [{ type: "text", text: JSON.stringify(payload) }],
+          structuredContent: payload
+        };
+      }
+
       app.repo.updateTaskStatus(taskId, "pending");
-      const payload = { ok: true, taskId, status: "pending" };
+      app.repo.appendQueueEvent(task.runId, "task_retried", { taskId }, taskId);
+
+      const shouldResumeRun = resumeRun ?? true;
+      if (shouldResumeRun) {
+        await app.engine.run(task.runId);
+      }
+
+      const payload = {
+        ok: true,
+        taskId,
+        status: "pending",
+        resumedRun: shouldResumeRun,
+        runStatus: getRunStatusResource(app.repo, task.runId)
+      };
       return {
-        content: [{ type: "text", text: JSON.stringify(payload) }],
+        content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
         structuredContent: payload
       };
     }

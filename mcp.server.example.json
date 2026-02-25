@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "agentfoundry": {
+      "command": "node",
+      "args": ["dist/cli/index.js", "mcp-server"],
+      "cwd": ".",
+      "env": {
+        "AGENTFOUNDRY_DB_PATH": "./agentfoundry.db",
+        "AGENTFOUNDRY_SUBAGENT_CMD": "/absolute/path/to/subagent-runner.sh"
+      }
+    }
+  }
+}
