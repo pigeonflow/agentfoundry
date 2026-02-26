@@ -1,6 +1,7 @@
 import { DispatchRouter } from "../dispatch/dispatcher.js";
 import { Repository } from "../db/repository.js";
 import { Scheduler } from "../queue/scheduler.js";
+import { mustRunVerification } from "../verify/policies.js";
 import { VerificationRunner } from "../verify/verificationRunner.js";
 
 export class Engine {
@@ -53,6 +54,21 @@ export class Engine {
       );
 
       this.repo.updateTaskStatus(task.id, "verifying");
+
+      if (!mustRunVerification(task)) {
+        this.repo.updateTaskStatus(task.id, "failed");
+        this.repo.appendQueueEvent(
+          runId,
+          "task_failed",
+          {
+            reason: "verification_missing",
+            summary: "Task has no verification commands configured."
+          },
+          task.id
+        );
+        this.repo.updateRunStatus(runId, "failed", true);
+        return;
+      }
 
       const report = this.verificationRunner.run(task.id, task.verification.commands);
       this.repo.saveVerificationReport(report);

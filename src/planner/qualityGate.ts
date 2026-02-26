@@ -14,10 +14,6 @@ export function evaluatePlanQuality(tasks: TaskRecord[]): QualityGateResult {
     discrepancies.push("Planner produced zero tasks.");
   }
 
-  if (!tasks.some((task) => task.verification.requireTestPass)) {
-    risks.push("No task requires test verification.");
-  }
-
   for (const task of tasks) {
     if (task.contextCapsule.maxContextTokens > 3000) {
       risks.push(`Task ${task.id} may overflow subagent context.`);

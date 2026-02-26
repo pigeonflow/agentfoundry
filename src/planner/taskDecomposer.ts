@@ -81,9 +81,10 @@ export async function decomposePrompt(
     const taskId = newId("task");
     const title = typeof raw.title === "string" ? raw.title : `Task ${index + 1}`;
     const description = typeof raw.description === "string" ? raw.description : title;
-    const verificationCommands = toStringArray(raw.verificationCommands).length > 0
-      ? toStringArray(raw.verificationCommands)
-      : ["npm run build"];
+    const verificationCommands = toStringArray(raw.verificationCommands);
+    if (verificationCommands.length === 0) {
+      throw new Error(`Task ${index + 1} is missing verificationCommands.`);
+    }
 
     return {
       id: taskId,
@@ -101,8 +102,6 @@ export async function decomposePrompt(
         ? toStringArray(raw.acceptanceCriteria)
         : ["Task objective is implemented.", "Verification commands pass."],
       verification: {
-        requireBuildPass: true,
-        requireTestPass: false,
         commands: verificationCommands
       },
       estimatedEffort: toEffort(raw.estimatedEffort),

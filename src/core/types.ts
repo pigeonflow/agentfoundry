@@ -18,8 +18,6 @@ export interface TaskContextCapsule {
 }
 
 export interface VerificationPolicy {
-  requireBuildPass: boolean;
-  requireTestPass: boolean;
   commands: string[];
 }
 

@@ -2,7 +2,10 @@ import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mc
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { AgentFoundryApp } from "../app.js";
+import { TaskDependency, TaskRecord } from "../core/types.js";
+import { newId, nowIso } from "../core/utils.js";
 import { buildTaskPrompt } from "../dispatch/taskPrompt.js";
+import { mustRunVerification } from "../verify/policies.js";
 import { VerificationRunner } from "../verify/verificationRunner.js";
 import { getOverviewResource, getRunStatusResource } from "./resources.js";
 
@@ -97,32 +100,48 @@ export async function startMcpServer(dbPath?: string): Promise<void> {
   );
 
   server.registerTool(
-    "agentfoundry_plan",
+    "agentfoundry_submit_plan",
     {
-      title: "Create Plan",
-      description: "Create a queued run from a high-level prompt without executing it.",
+      title: "Submit Plan",
+      description: "Submit an AI-authored plan and create a queued run. This is the required first step before adding tasks.",
       inputSchema: {
-        prompt: z.string().min(1)
+        prompt: z.string().min(1),
+        planSummary: z.string().min(1),
+        risks: z.array(z.string()).optional(),
+        discrepancies: z.array(z.string()).optional()
       }
     },
-    async ({ prompt }) => {
-      const sampleFn = async (llmPrompt: string): Promise<string> => {
-        const result = await server.server.createMessage({
-          messages: [{ role: "user", content: { type: "text", text: llmPrompt } }],
-          maxTokens: 4096
-        });
-        if (result.content.type !== "text") {
-          throw new Error("LLM sampler returned non-text content.");
-        }
-        return result.content.text;
-      };
-      const planned = await app.planner.createRunFromPrompt(prompt, sampleFn);
+    async ({ prompt, planSummary, risks, discrepancies }) => {
+      const planId = newId("plan");
+      const runId = newId("run");
+      const createdAt = nowIso();
+
+      app.repo.savePlan({
+        id: planId,
+        inputPrompt: `${prompt}\n\nPlan Summary:\n${planSummary}`,
+        risks: risks ?? [],
+        discrepancies: discrepancies ?? [],
+        createdAt
+      });
+
+      app.repo.saveRun({
+        id: runId,
+        planId,
+        status: "queued",
+        startedAt: createdAt
+      });
+
+      app.repo.appendQueueEvent(runId, "plan_submitted", {
+        risksCount: (risks ?? []).length,
+        discrepanciesCount: (discrepancies ?? []).length
+      });
+
       const payload = {
-        runId: planned.run.id,
-        planId: planned.plan.id,
-        tasks: planned.tasks.length,
-        risks: planned.plan.risks,
-        discrepancies: planned.plan.discrepancies
+        runId,
+        planId,
+        status: "queued",
+        message:
+          "Plan accepted. Next call agentfoundry_add_tasks_and_start with this runId and atomic tasks. Hint: stay in plan mode until the task list is complete and ordered."
       };
       return {
         content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
@@ -131,43 +150,143 @@ export async function startMcpServer(dbPath?: string): Promise<void> {
     }
   );
 
-  server.registerTool(
-    "agentfoundry_plan_and_start",
-    {
-      title: "Plan and Start",
-      description: "Create a queued run from a high-level prompt and immediately mark it as running, ready for task claiming. Use this as a shortcut for agentfoundry_plan followed by agentfoundry_execute_run. After calling this, loop agentfoundry_claim_next_task to execute each task with your own tools.",
-      inputSchema: {
-        prompt: z.string().min(1)
-      }
-    },
-    async ({ prompt }) => {
-      const sampleFn = async (llmPrompt: string): Promise<string> => {
-        const result = await server.server.createMessage({
-          messages: [{ role: "user", content: { type: "text", text: llmPrompt } }],
-          maxTokens: 4096
-        });
-        if (result.content.type !== "text") {
-          throw new Error("LLM sampler returned non-text content.");
-        }
-        return result.content.text;
-      };
-      const planned = await app.planner.createRunFromPrompt(prompt, sampleFn);
-      // Mark as running so LLM workers can claim tasks — do NOT dispatch via engine
-      app.repo.updateRunStatus(planned.run.id, "running");
-      app.repo.appendQueueEvent(planned.run.id, "run_started");
-      app.scheduler.promoteReady(planned.run.id);
-      const payload = {
-        runId: planned.run.id,
-        planId: planned.plan.id,
-        taskCount: planned.tasks.length,
-        snapshot: app.repo.queueSnapshot(planned.run.id),
-        message: "Run is active. Call agentfoundry_claim_next_task to claim and execute tasks one by one using your own tools, then submit each with agentfoundry_submit_task_result."
-      };
+  const addTasksInputSchema = {
+    runId: z.string().min(1),
+    tasks: z
+      .array(
+        z.object({
+          title: z.string().min(1),
+          description: z.string().min(1),
+          acceptanceCriteria: z.array(z.string().min(1)).min(1).optional(),
+          estimatedEffort: z.enum(["tiny", "small", "medium", "large"]).optional(),
+          relevantFiles: z.array(z.string().min(1)).optional(),
+          verificationCommands: z.array(z.string().min(1)).min(1)
+        })
+      )
+      .min(1)
+      .max(30)
+  };
+
+  async function addTasksAndStartRun(input: {
+    runId: string;
+    tasks: Array<{
+      title: string;
+      description: string;
+      acceptanceCriteria?: string[];
+      estimatedEffort?: "tiny" | "small" | "medium" | "large";
+      relevantFiles?: string[];
+      verificationCommands: string[];
+    }>;
+  }): Promise<{ content: Array<{ type: "text"; text: string }>; structuredContent: Record<string, unknown> }> {
+    const { runId, tasks } = input;
+
+    const run = app.repo.getRun(runId);
+    if (!run) {
+      const payload = { ok: false, error: `Run not found: ${runId}` };
       return {
-        content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+        content: [{ type: "text", text: JSON.stringify(payload) }],
         structuredContent: payload
       };
     }
+
+    if (run.status !== "queued") {
+      const payload = {
+        ok: false,
+        error: `Run ${runId} is already ${run.status}. Tasks can only be added before start.`
+      };
+      return {
+        content: [{ type: "text", text: JSON.stringify(payload) }],
+        structuredContent: payload
+      };
+    }
+
+    const existingTasks = app.repo.listTasks(runId);
+    if (existingTasks.length > 0) {
+      const payload = {
+        ok: false,
+        error: `Run ${runId} already has tasks. Create a new plan/run for a fresh task set.`
+      };
+      return {
+        content: [{ type: "text", text: JSON.stringify(payload) }],
+        structuredContent: payload
+      };
+    }
+
+    const createdAt = nowIso();
+    const createdTasks: TaskRecord[] = tasks.map((task, index) => {
+      const acceptanceCriteria = task.acceptanceCriteria?.length
+        ? task.acceptanceCriteria
+        : ["Task objective is implemented.", "Verification commands pass."];
+
+      return {
+        id: newId("task"),
+        runId,
+        title: task.title,
+        description: task.description,
+        contextCapsule: {
+          summary: task.description,
+          scope: acceptanceCriteria,
+          constraints: [
+            "Keep changes minimal and focused.",
+            "Preserve existing APIs unless explicitly required."
+          ],
+          relevantFiles: task.relevantFiles ?? [],
+          maxContextTokens: 2400
+        },
+        acceptanceCriteria,
+        verification: {
+          commands: task.verificationCommands
+        },
+        estimatedEffort: task.estimatedEffort ?? "medium",
+        status: "pending",
+        sequenceOrder: index,
+        createdAt,
+        updatedAt: createdAt
+      };
+    });
+
+    const dependencies: TaskDependency[] = [];
+    for (let index = 1; index < createdTasks.length; index += 1) {
+      dependencies.push({
+        taskId: createdTasks[index].id,
+        dependsOnTaskId: createdTasks[index - 1].id
+      });
+    }
+
+    app.repo.saveTasks(createdTasks);
+    app.repo.saveDependencies(dependencies);
+    app.repo.appendQueueEvent(runId, "tasks_added", {
+      taskCount: createdTasks.length,
+      mode: "submitted"
+    });
+
+    app.repo.updateRunStatus(runId, "running");
+    app.repo.appendQueueEvent(runId, "run_started");
+    app.scheduler.promoteReady(runId);
+
+    const payload = {
+      ok: true,
+      runId,
+      taskCount: createdTasks.length,
+      snapshot: app.repo.queueSnapshot(runId),
+      message:
+        "Run is active. Call agentfoundry_claim_next_task to claim and execute tasks one by one using your own tools, then submit each with agentfoundry_submit_task_result."
+    };
+
+    return {
+      content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+      structuredContent: payload
+    };
+  }
+
+  server.registerTool(
+    "agentfoundry_add_tasks_and_start",
+    {
+      title: "Add Tasks and Start",
+      description: "Add ordered atomic tasks to a submitted queued plan and start execution. Requires a prior agentfoundry_submit_plan call.",
+      inputSchema: addTasksInputSchema
+    },
+    addTasksAndStartRun
   );
 
   server.registerTool(
@@ -350,6 +469,30 @@ export async function startMcpServer(dbPath?: string): Promise<void> {
         { summary: "Submitted via agentfoundry_execute_run compatibility flow." },
         task.id
       );
+
+      if (!mustRunVerification(task)) {
+        app.repo.updateTaskStatus(task.id, "failed");
+        app.repo.appendQueueEvent(
+          runId,
+          "task_failed",
+          {
+            reason: "verification_missing",
+            failingCommand: "none"
+          },
+          task.id
+        );
+        app.repo.updateRunStatus(runId, "failed", true);
+        const payload = {
+          ok: false,
+          taskId: task.id,
+          error: "Task has no verification commands configured.",
+          runStatus: getRunStatusResource(app.repo, runId)
+        };
+        return {
+          content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+          structuredContent: payload
+        };
+      }
 
       const report = verificationRunner.run(task.id, task.verification.commands);
       app.repo.saveVerificationReport(report);
@@ -543,6 +686,30 @@ export async function startMcpServer(dbPath?: string): Promise<void> {
         summary ? { summary } : undefined,
         task.id
       );
+
+      if (!mustRunVerification(task)) {
+        app.repo.updateTaskStatus(task.id, "failed");
+        app.repo.appendQueueEvent(
+          task.runId,
+          "task_failed",
+          {
+            reason: "verification_missing",
+            failingCommand: "none"
+          },
+          task.id
+        );
+        app.repo.updateRunStatus(task.runId, "failed", true);
+        const payload = {
+          ok: false,
+          taskId,
+          error: "Task has no verification commands configured.",
+          snapshot: app.repo.queueSnapshot(task.runId)
+        };
+        return {
+          content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+          structuredContent: payload
+        };
+      }
 
       const report = verificationRunner.run(task.id, task.verification.commands);
       app.repo.saveVerificationReport(report);

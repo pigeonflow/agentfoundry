@@ -20,8 +20,6 @@ function sampleTask(): TaskRecord {
     },
     acceptanceCriteria: ["Command works"],
     verification: {
-      requireBuildPass: true,
-      requireTestPass: true,
       commands: ["npm run build"]
     },
     estimatedEffort: "small",

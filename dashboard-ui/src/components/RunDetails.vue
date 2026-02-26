@@ -10,6 +10,11 @@ import {
   FileText,
   Bot,
   Timer,
+  Clipboard,
+  Clock3,
+  AlertTriangle,
+  Play,
+  CircleDashed,
 } from "lucide-vue-next";
 import type { DashboardResponse, RunCard } from "../types";
 import Card from "./ui/Card.vue";
@@ -17,6 +22,7 @@ import CardHeader from "./ui/CardHeader.vue";
 import CardTitle from "./ui/CardTitle.vue";
 import CardContent from "./ui/CardContent.vue";
 import Badge from "./ui/Badge.vue";
+import Button from "./ui/Button.vue";
 import Progress from "./ui/Progress.vue";
 import Separator from "./ui/Separator.vue";
 import ScrollArea from "./ui/ScrollArea.vue";
@@ -93,6 +99,110 @@ const isRunActive = computed(() => {
   const s = props.activeRunCard?.run.status ?? props.activeRun?.run?.status;
   return s === "running" || s === "pending";
 });
+
+type EventRecord = {
+  id: string;
+  eventType: string;
+  createdAt?: string;
+  taskId?: string;
+  payload?: Record<string, unknown>;
+  raw: unknown;
+};
+
+const copiedItem = ref<string | null>(null);
+const copyErrorItem = ref<string | null>(null);
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  return value as Record<string, unknown>;
+}
+
+const recentEventRecords = computed<EventRecord[]>(() => {
+  const events = props.activeRun?.recentEvents ?? [];
+  return events.map((raw, index) => {
+    const rec = asRecord(raw);
+    const eventType = typeof rec?.eventType === "string" ? rec.eventType : "event";
+    const createdAt = typeof rec?.createdAt === "string" ? rec.createdAt : undefined;
+    const taskId = typeof rec?.taskId === "string" ? rec.taskId : undefined;
+    const payload = asRecord(rec?.payload);
+    return {
+      id: `${eventType}-${createdAt ?? "unknown"}-${index}`,
+      eventType,
+      createdAt,
+      taskId,
+      payload,
+      raw,
+    };
+  });
+});
+
+function formatEventType(eventType: string): string {
+  return eventType
+    .split("_")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function eventIcon(eventType: string) {
+  if (eventType.includes("failed")) return AlertTriangle;
+  if (eventType.includes("completed")) return CheckCircle2;
+  if (eventType.includes("running") || eventType.includes("started")) return Play;
+  if (eventType.includes("claimed") || eventType.includes("submitted") || eventType.includes("dispatched")) return CircleDashed;
+  return Clock3;
+}
+
+function formatEventTime(value?: string): string {
+  if (!value) return "Unknown time";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString();
+}
+
+function truncateText(value: string, limit = 120): string {
+  if (value.length <= limit) return value;
+  return `${value.slice(0, limit)}…`;
+}
+
+function payloadEntries(payload?: Record<string, unknown>): Array<{ key: string; value: string }> {
+  if (!payload) return [];
+  return Object.entries(payload).map(([key, value]) => {
+    const stringValue = typeof value === "string" ? value : JSON.stringify(value);
+    return { key, value: truncateText(stringValue ?? String(value), 140) };
+  });
+}
+
+function rawEventJson(event: EventRecord): string {
+  return JSON.stringify(event.raw, null, 2);
+}
+
+async function copyToClipboard(text: string, id: string): Promise<void> {
+  try {
+    if (!navigator.clipboard?.writeText) {
+      copiedItem.value = null;
+      copyErrorItem.value = id;
+      setTimeout(() => {
+        if (copyErrorItem.value === id) copyErrorItem.value = null;
+      }, 1800);
+      return;
+    }
+    await navigator.clipboard.writeText(text);
+    copyErrorItem.value = null;
+    copiedItem.value = id;
+    setTimeout(() => {
+      if (copiedItem.value === id) copiedItem.value = null;
+    }, 1500);
+  } catch {
+    copiedItem.value = null;
+    copyErrorItem.value = id;
+    setTimeout(() => {
+      if (copyErrorItem.value === id) copyErrorItem.value = null;
+    }, 1800);
+  }
+}
+
+function copyAllEvents(): Promise<void> {
+  return copyToClipboard(JSON.stringify(recentEventRecords.value.map((ev) => ev.raw), null, 2), "all-events");
+}
 </script>
 
 <template>
@@ -283,19 +393,61 @@ const isRunActive = computed(() => {
     </Card>
 
     <!-- Recent Events timeline -->
-    <Card v-if="activeRun.recentEvents?.length">
-      <CardHeader class="px-4 pt-4 pb-2">
+    <Card v-if="recentEventRecords.length">
+      <CardHeader class="px-4 pt-4 pb-2 flex-row items-center justify-between gap-2">
         <CardTitle class="text-sm">Recent Events</CardTitle>
+        <Button
+          variant="outline"
+          size="sm"
+          class="h-7 w-7 p-0 shrink-0"
+          :title="copiedItem === 'all-events' ? 'Copied' : copyErrorItem === 'all-events' ? 'Copy unavailable' : 'Copy all events JSON'"
+          @click="copyAllEvents"
+        >
+          <Clipboard class="h-3.5 w-3.5" />
+        </Button>
       </CardHeader>
       <CardContent class="p-4 pt-0">
-        <ScrollArea class="max-h-52 rounded-md">
+        <ScrollArea class="h-64 rounded-md pr-1">
           <div
-            v-for="(ev, i) in activeRun.recentEvents"
-            :key="i"
-            class="flex gap-2 border-b border-border/40 py-1.5 text-xs last:border-0"
+            v-for="event in recentEventRecords"
+            :key="event.id"
+            class="rounded-lg border border-border/60 bg-muted/20 p-3 mb-2 last:mb-0"
           >
-            <span class="shrink-0 font-mono text-muted-foreground">{{ String(i + 1).padStart(2, "0") }}.</span>
-            <span class="break-all text-foreground/80">{{ JSON.stringify(ev) }}</span>
+            <div class="flex items-start justify-between gap-2">
+              <div class="min-w-0">
+                <div class="flex items-center gap-2">
+                  <component :is="eventIcon(event.eventType)" class="h-4 w-4 text-muted-foreground" />
+                  <span class="text-xs font-medium text-foreground">{{ formatEventType(event.eventType) }}</span>
+                </div>
+                <div class="mt-1 flex items-center gap-2 text-[11px] text-muted-foreground flex-wrap">
+                  <span>{{ formatEventTime(event.createdAt) }}</span>
+                  <span v-if="event.taskId" class="font-mono bg-muted px-1.5 py-0.5 rounded">{{ truncateId(event.taskId) }}</span>
+                </div>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                class="h-7 w-7 p-0 shrink-0"
+                :title="copiedItem === event.id ? 'Copied' : copyErrorItem === event.id ? 'Copy unavailable' : 'Copy event JSON'"
+                @click="copyToClipboard(rawEventJson(event), event.id)"
+              >
+                <Clipboard class="h-3.5 w-3.5" />
+              </Button>
+            </div>
+
+            <div class="mt-2 space-y-1.5">
+              <div v-if="payloadEntries(event.payload).length === 0" class="text-xs text-muted-foreground">
+                No payload
+              </div>
+              <div
+                v-for="entry in payloadEntries(event.payload)"
+                :key="`${event.id}-${entry.key}`"
+                class="grid grid-cols-[96px_1fr] gap-2 text-xs"
+              >
+                <span class="text-muted-foreground font-mono truncate">{{ entry.key }}</span>
+                <span class="text-foreground/85 break-words">{{ entry.value }}</span>
+              </div>
+            </div>
           </div>
         </ScrollArea>
       </CardContent>

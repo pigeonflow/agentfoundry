@@ -18,6 +18,8 @@ Or use directly with npx — no install needed.
 
 Add to your `.vscode/mcp.json`:
 
+- With npx:
+
 ```json
 {
   "servers": {
@@ -29,9 +31,24 @@ Add to your `.vscode/mcp.json`:
 }
 ```
 
+- With global install (`npm install -g agentfoundry`):
+
+```json
+{
+  "servers": {
+    "agentfoundry": {
+      "command": "agentfoundry",
+      "args": ["mcp-server"]
+    }
+  }
+}
+```
+
 ### Claude Desktop
 
 Add to your `claude_desktop_config.json`:
+
+- With npx:
 
 ```json
 {
@@ -44,16 +61,14 @@ Add to your `claude_desktop_config.json`:
 }
 ```
 
-### OpenClaw
-
-Add to your OpenClaw MCP config:
+- With global install (`npm install -g agentfoundry`):
 
 ```json
 {
   "mcpServers": {
     "agentfoundry": {
-      "command": "npx",
-      "args": ["agentfoundry", "mcp-server"]
+      "command": "agentfoundry",
+      "args": ["mcp-server"]
     }
   }
 }
@@ -70,9 +85,9 @@ That's it. Two lines. The MCP server manages its own SQLite database automatical
 
 ## What You Get
 
-- LLM-driven task decomposition via MCP sampling (your host LLM does the planning)
+- Plan-gated execution flow — a plan must be submitted before tasks can be added
 - SQLite-backed queue with lease tokens — tasks can't be double-claimed
-- Verification gate on every task — configurable `build`/`test` commands must pass
+- Verification gate on every task — agent-defined verification commands must pass
 - Claim-based execution loop — the calling agent is the worker, not a subprocess
 - Local dashboard for run visibility
 - Retry, heartbeat, stop, and delete on any run or task
@@ -82,26 +97,102 @@ That's it. Two lines. The MCP server manages its own SQLite database automatical
 The full loop from inside any MCP-capable agent:
 
 ```
-1. agentfoundry_plan_and_start   — decompose prompt into tasks, mark run ready
-2. agentfoundry_claim_next_task  — get next task + full execution prompt
-3. (do the work with your own tools)
-4. agentfoundry_submit_task_result — trigger verification, advance queue
-5. repeat until claimed: false
+1. agentfoundry_submit_plan         — submit plan, receive queued runId
+2. agentfoundry_add_tasks_and_start — add ordered tasks, start run
+3. agentfoundry_claim_next_task     — get next task + full execution prompt
+4. (do the work with your own tools)
+5. agentfoundry_submit_task_result  — trigger verification, advance queue
+6. repeat until claimed: false
 ```
 
-To two-step it:
+## Planning for Best Results
 
+For long or complex work, your biggest failure modes are:
+
+- losing context between turns,
+- re-explaining intent when switching clients,
+- tasks that are too broad to verify reliably.
+
+Use `agentfoundry_submit_plan` to capture durable planning context once, then use `agentfoundry_add_tasks_and_start` to inject explicit, verifiable tasks.
+
+### Example: `agentfoundry_submit_plan`
+
+```json
+{
+  "prompt": "Refactor auth flow and add session hardening.",
+  "planSummary": "Split into migration-safe phases: inspect current auth/session boundaries, implement hardening changes, update integration points, then validate with targeted and full-suite checks. Preserve existing public APIs unless explicitly changed.",
+  "risks": [
+    "Session invalidation edge cases may break active users.",
+    "Middleware order changes may alter route behavior."
+  ],
+  "discrepancies": [
+    "Auth ownership is split across API and web packages.",
+    "Test coverage for cookie expiration is currently thin."
+  ]
+}
 ```
-agentfoundry_plan        → creates run in queued state
-agentfoundry_execute_run → marks it running, promotes ready tasks
+
+### Example: `agentfoundry_add_tasks_and_start`
+
+`verificationCommands` are required per task and should match the repository's tooling (`pnpm`, `yarn`, `npm`, `cargo`, `go test`, `make`, etc.).
+
+```json
+{
+  "runId": "run_abc123",
+  "tasks": [
+    {
+      "title": "Audit auth/session boundaries",
+      "description": "Map login, refresh, and logout flows across API and web layers. Produce a concise boundary summary used by all downstream tasks.",
+      "acceptanceCriteria": [
+        "Boundary summary identifies token issuance and invalidation points.",
+        "Relevant files and dependency edges are documented in task output."
+      ],
+      "relevantFiles": ["src/auth", "src/session", "src/middleware"],
+      "verificationCommands": ["pnpm -r test --filter auth"]
+    },
+    {
+      "title": "Implement session hardening updates",
+      "description": "Apply cookie/session security updates and adjust middleware sequencing without breaking current route contracts.",
+      "acceptanceCriteria": [
+        "Secure session settings are enforced.",
+        "Existing auth route behavior remains compatible."
+      ],
+      "relevantFiles": ["src/session/config.ts", "src/middleware/auth.ts"],
+      "verificationCommands": ["pnpm build", "pnpm test"]
+    },
+    {
+      "title": "Add regression tests for session invalidation",
+      "description": "Cover refresh/logout invalidation paths and expiry behavior to prevent regressions.",
+      "acceptanceCriteria": [
+        "Invalidation tests fail before fix and pass after fix.",
+        "Expiry behavior is asserted for primary edge cases."
+      ],
+      "relevantFiles": ["tests/auth", "tests/session"],
+      "verificationCommands": ["pnpm test -- tests/auth/session-invalidation.spec.ts"]
+    }
+  ]
+}
 ```
+
+## Cross-Client Handoff Pattern
+
+To switch from one MCP client to another without re-planning:
+
+1. Keep `runId` from `agentfoundry_submit_plan`.
+2. Store the same task list used for `agentfoundry_add_tasks_and_start`.
+3. In the new client, continue with:
+   - `agentfoundry_status` (recover state)
+   - `agentfoundry_claim_next_task` (resume work)
+   - `agentfoundry_submit_task_result` (advance queue)
+
+This avoids repeating plan context and keeps the queue state authoritative.
 
 ## MCP Tools
 
 | Tool | What it does |
 |---|---|
-| `agentfoundry_plan` | Decompose prompt → queued run |
-| `agentfoundry_plan_and_start` | Decompose + mark running immediately |
+| `agentfoundry_submit_plan` | Submit a plan, create queued run (required first step) |
+| `agentfoundry_add_tasks_and_start` | Add ordered tasks (with required verification commands) to queued run and start it |
 | `agentfoundry_execute_run` | Start a queued run |
 | `agentfoundry_claim_next_task` | Lease next task, receive `taskPrompt` |
 | `agentfoundry_submit_task_result` | Submit work, run verification |
@@ -116,6 +207,7 @@ Resources: `agentfoundry://overview`, `agentfoundry://run/{runId}`
 
 ```bash
 npx agentfoundry dashboard --port 4317
+agentfoundry dashboard --port 4317
 # http://127.0.0.1:4317
 ```
 
@@ -125,9 +217,27 @@ Live run progress, task status, duration, stop/delete controls.
 
 ```bash
 npx agentfoundry status          # show all runs
-npx agentfoundry plan "prompt"   # plan tasks from a prompt
-npx agentfoundry run <runId>     # execute a planned run
 npx agentfoundry watch <runId>   # watch run progress
+npx agentfoundry dashboard --port 4317
+
+agentfoundry status          # show all runs (global install)
+agentfoundry watch <runId>   # watch run progress (global install)
+agentfoundry dashboard --port 4317
+```
+
+## Generate SKILL.md
+
+Use the CLI to print a ready-to-save `SKILL.md` template for OpenClaw or other skill-driven agents:
+
+```bash
+npx agentfoundry --get-skill > SKILL.md
+agentfoundry --get-skill > SKILL.md
+```
+
+Compatibility alias (common typo) is also supported:
+
+```bash
+agentfoundry --get-skil > SKILL.md
 ```
 
 ## Contributing

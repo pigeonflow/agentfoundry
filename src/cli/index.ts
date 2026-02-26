@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 import { setTimeout as sleep } from "node:timers/promises";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { AgentFoundryApp } from "../app.js";
+import { getSkillTemplate } from "./skillTemplate.js";
 import { startDashboardServer } from "../dashboard/server.js";
 import { startMcpServer } from "../mcp/server.js";
 import { getRunStatusResource } from "../mcp/resources.js";
@@ -15,7 +14,10 @@ function usage(): void {
       "Commands:",
       "  plan <prompt>",
       "  run <prompt>",
-      "  mcp-run <prompt>",
+      "  mcp-run <prompt> (deprecated)",
+      "  --get-skill",
+      "  --get-skil (alias)",
+      "  get-skill",
       "  dashboard [--port=4317]",
       "  status <runId> [--json]",
       "  watch <runId> [--interval=1500]",
@@ -30,72 +32,6 @@ function usage(): void {
       "  AGENTFOUNDRY_MCP_SERVER_CMD='custom server command'"
     ].join("\n") + "\n"
   );
-}
-
-function resolveMcpServerProcess(): { command: string; args: string[] } {
-  const customCommand = process.env.AGENTFOUNDRY_MCP_SERVER_CMD?.trim();
-  if (customCommand) {
-    return {
-      command: "sh",
-      args: ["-lc", customCommand]
-    };
-  }
-
-  const currentEntry = process.argv[1] ?? "";
-  if (currentEntry.endsWith(".ts")) {
-    return {
-      command: "npx",
-      args: ["tsx", "src/cli/index.ts", "mcp-server"]
-    };
-  }
-
-  return {
-    command: process.execPath,
-    args: [currentEntry, "mcp-server"]
-  };
-}
-
-async function runViaMcp(prompt: string): Promise<Record<string, unknown>> {
-  const serverProcess = resolveMcpServerProcess();
-  const transport = new StdioClientTransport({
-    command: serverProcess.command,
-    args: serverProcess.args,
-    env: Object.entries(process.env).reduce<Record<string, string>>((acc, [key, value]) => {
-      if (value !== undefined) {
-        acc[key] = value;
-      }
-      return acc;
-    }, {})
-  });
-
-  const client = new Client(
-    {
-      name: "agentfoundry-cli-client",
-      version: "0.1.0"
-    },
-    {
-      capabilities: {}
-    }
-  );
-
-  await client.connect(transport);
-  try {
-    const result = await client.callTool({
-      name: "agentfoundry_plan_and_start",
-      arguments: { prompt }
-    });
-
-    const structured = result.structuredContent;
-    if (structured && typeof structured === "object") {
-      return structured as Record<string, unknown>;
-    }
-
-    return {
-      content: result.content
-    };
-  } finally {
-    await client.close();
-  }
 }
 
 function formatStatus(resource: Record<string, unknown>): string {
@@ -122,6 +58,11 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (command === "--get-skill" || command === "--get-skil" || command === "get-skill") {
+    process.stdout.write(getSkillTemplate());
+    return;
+  }
+
   if (command === "dashboard") {
     const portArg = rest.find((arg) => arg.startsWith("--port="));
     const port = portArg ? Number(portArg.split("=")[1]) : undefined;
@@ -133,26 +74,23 @@ async function main(): Promise<void> {
   try {
     if (command === "plan") {
       throw new Error(
-        "The 'plan' command requires an LLM to decompose tasks via MCP sampling.\n" +
-        "Use 'mcp-run <prompt>' instead, which routes through the MCP server where the LLM is available."
+        "The 'plan' command is not available in CLI mode.\n" +
+        "Use MCP tools instead: agentfoundry_submit_plan, then agentfoundry_add_tasks_and_start."
       );
     }
 
     if (command === "run") {
       throw new Error(
-        "The 'run' command requires an LLM to decompose tasks via MCP sampling.\n" +
-        "Use 'mcp-run <prompt>' instead, which routes through the MCP server where the LLM is available."
+        "The 'run' command is not available in CLI mode.\n" +
+        "Use MCP tools instead: agentfoundry_submit_plan, then agentfoundry_add_tasks_and_start."
       );
     }
 
     if (command === "mcp-run") {
-      const prompt = rest.join(" ").trim();
-      if (!prompt) {
-        throw new Error("Missing prompt for mcp-run command.");
-      }
-      const result = await runViaMcp(prompt);
-      process.stdout.write(JSON.stringify(result, null, 2) + "\n");
-      return;
+      throw new Error(
+        "The 'mcp-run' command is deprecated because planning now requires explicit plan submission and task injection.\n" +
+        "Use your MCP client loop: submit_plan -> add_tasks_and_start -> claim_next_task -> submit_task_result."
+      );
     }
 
     if (command === "status") {
