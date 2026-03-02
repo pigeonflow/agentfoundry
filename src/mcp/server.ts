@@ -820,6 +820,14 @@ export async function startMcpServer(dbPath?: string): Promise<void> {
       app.repo.updateTaskStatus(taskId, "pending");
       app.repo.appendQueueEvent(task.runId, "task_retried", { taskId }, taskId);
 
+      // Always restore run to "running" when retrying a task — a failed run
+      // with pending tasks should be claimable without a separate resume call.
+      const run = app.repo.getRun(task.runId);
+      if (run && run.status === "failed") {
+        app.repo.updateRunStatus(task.runId, "running");
+        app.repo.appendQueueEvent(task.runId, "run_resumed_via_retry", { taskId });
+      }
+
       const shouldResumeRun = resumeRun ?? false;
       if (shouldResumeRun) {
         await app.engine.run(task.runId);
