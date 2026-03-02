@@ -116,6 +116,45 @@ export class Repository {
     this.db.close();
   }
 
+  /**
+   * Delete completed/failed runs older than `maxAgeDays`.
+   * Cascades to tasks, queue_events, verification_reports, and task_dependencies via FK.
+   * Returns the number of runs pruned.
+   */
+  pruneOldRuns(maxAgeDays: number): number {
+    const cutoff = new Date(Date.now() - maxAgeDays * 86400_000).toISOString();
+    // Only prune terminal runs (completed/failed)
+    const planIds = this.db
+      .prepare(
+        `SELECT DISTINCT r.plan_id FROM runs r
+         WHERE r.status IN ('completed', 'failed')
+           AND r.finished_at IS NOT NULL
+           AND r.finished_at < @cutoff`
+      )
+      .all({ cutoff }) as { plan_id: string }[];
+
+    const result = this.db
+      .prepare(
+        `DELETE FROM runs
+         WHERE status IN ('completed', 'failed')
+           AND finished_at IS NOT NULL
+           AND finished_at < @cutoff`
+      )
+      .run({ cutoff });
+
+    // Clean up orphaned plans (no runs referencing them)
+    for (const { plan_id } of planIds) {
+      const remaining = this.db
+        .prepare(`SELECT COUNT(*) as cnt FROM runs WHERE plan_id = @plan_id`)
+        .get({ plan_id }) as { cnt: number };
+      if (remaining.cnt === 0) {
+        this.db.prepare(`DELETE FROM plans WHERE id = @plan_id`).run({ plan_id });
+      }
+    }
+
+    return result.changes;
+  }
+
   savePlan(plan: PlanRecord): void {
     this.db
       .prepare(

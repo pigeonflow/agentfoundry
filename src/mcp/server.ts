@@ -31,6 +31,15 @@ export async function startMcpServer(dbPath?: string): Promise<void> {
   const app = new AgentFoundryApp(dbPath);
   const verificationRunner = new VerificationRunner();
 
+  // Auto-prune old runs on startup if configured
+  const pruneMaxDays = parseInt(process.env.AGENTFOUNDRY_PRUNE_DAYS ?? "", 10);
+  if (pruneMaxDays > 0) {
+    const pruned = app.repo.pruneOldRuns(pruneMaxDays);
+    if (pruned > 0) {
+      process.stderr.write(`[agentfoundry] auto-pruned ${pruned} old run(s) (>${pruneMaxDays} days)\n`);
+    }
+  }
+
   const server = new McpServer({
     name: "agentfoundry",
     version: "0.1.0"
@@ -840,6 +849,25 @@ export async function startMcpServer(dbPath?: string): Promise<void> {
         resumedRun: shouldResumeRun,
         snapshot: app.repo.queueSnapshot(task.runId)
       };
+      return {
+        content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+        structuredContent: payload
+      };
+    }
+  );
+
+  server.registerTool(
+    "agentfoundry_prune",
+    {
+      title: "Prune Old Runs",
+      description: "Delete completed/failed runs older than maxAgeDays. Cascades to tasks, events, and reports.",
+      inputSchema: {
+        maxAgeDays: z.number().min(1).describe("Delete terminal runs older than this many days")
+      }
+    },
+    async ({ maxAgeDays }) => {
+      const pruned = app.repo.pruneOldRuns(maxAgeDays);
+      const payload = { ok: true, pruned, maxAgeDays };
       return {
         content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
         structuredContent: payload
